@@ -1,0 +1,21 @@
+workflows:
+  capsiscan-android:
+    name: CapsiScan Android APK
+    max_build_duration: 60
+    environment:
+      flutter: stable
+    scripts:
+      - name: Buat folder Android jika belum ada
+        script: |
+          if [ ! -d android ]; then
+            flutter create --platforms=android --project-name capsiscan --org id.capsiscan .
+          fi
+      - name: Atur minSdk menjadi 26
+        script: |
+          perl -pi -e 's/minSdk = flutter\.minSdkVersion/minSdk = 26/; s/minSdkVersion flutter\.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* || true
+      - name: Ambil dependensi
+        script: flutter pub get
+      - name: Bangun APK
+        script: flutter build apk --release
+    artifacts:
+      - build/**/outputs/**/*.apk
