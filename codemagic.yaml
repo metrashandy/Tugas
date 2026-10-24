@@ -5,14 +5,25 @@ workflows:
     environment:
       flutter: stable
     scripts:
+      - name: Periksa model TFLite
+        script: |
+          if [ ! -f assets/models/model.tflite ]; then
+            echo "GALAT: assets/models/model.tflite belum ada."
+            echo "Ekspor best.pt ke TFLite di Colab, ganti namanya menjadi model.tflite, lalu unggah ke assets/models/."
+            exit 1
+          fi
+          ls -lh assets/models/
+      - name: Versi Flutter
+        script: flutter --version
       - name: Buat folder Android jika belum ada
         script: |
           if [ ! -d android ]; then
             flutter create --platforms=android --project-name capsiscan --org id.capsiscan .
           fi
-      - name: Atur minSdk menjadi 26
+      - name: Atur minSdk menjadi 26 dan nama aplikasi
         script: |
           perl -pi -e 's/minSdk = flutter\.minSdkVersion/minSdk = 26/; s/minSdkVersion flutter\.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* || true
+          perl -pi -e 's/android:label="[^"]*"/android:label="CapsiScan"/' android/app/src/main/AndroidManifest.xml || true
       - name: Ambil dependensi
         script: flutter pub get
       - name: Bangun APK
