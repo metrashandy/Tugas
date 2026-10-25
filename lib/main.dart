@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -6,7 +7,20 @@ import 'history_page.dart';
 import 'history_store.dart';
 import 'voting.dart';
 
-void main() => runApp(const CapsiScanApp());
+/// Menampung galat tak tertangani agar tampil di layar (bukan langsung menutup).
+final ValueNotifier<String?> kAppError = ValueNotifier<String?>(null);
+
+void main() {
+  runZonedGuarded(() {
+    WidgetsFlutterBinding.ensureInitialized();
+    FlutterError.onError = (details) {
+      kAppError.value = 'Galat Flutter: ${details.exceptionAsString()}';
+    };
+    runApp(const CapsiScanApp());
+  }, (error, stack) {
+    kAppError.value = 'Galat tak tertangani: $error';
+  });
+}
 
 const Color kRed = Color(0xFFD32F2F);
 
@@ -105,25 +119,23 @@ class _HomePageState extends State<HomePage> {
   ScanResult? _result;
   bool _saved = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _initModel();
-  }
-
-  Future<void> _initModel() async {
+  /// Model dimuat saat pemindaian pertama (bukan saat aplikasi dibuka),
+  /// supaya aplikasi tetap bisa dibuka walaupun model bermasalah.
+  Future<bool> _ensureModel() async {
+    if (_modelReady) return true;
     try {
       await _detector.init();
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() => _modelReady = true);
+      return true;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() => _error = 'Gagal memuat model: $e');
+      return false;
     }
   }
 
   Future<void> _scan(ImageSource source) async {
-    if (!_modelReady) return;
     final picked = await _picker.pickImage(source: source, imageQuality: 95);
     if (picked == null) return;
     setState(() {
@@ -133,6 +145,7 @@ class _HomePageState extends State<HomePage> {
       _saved = false;
     });
     try {
+      if (!await _ensureModel()) return;
       final bytes = await picked.readAsBytes();
       final out = await _detector.run(bytes);
       final vote = castVote(out.items);
@@ -185,15 +198,10 @@ class _HomePageState extends State<HomePage> {
             const Icon(Icons.center_focus_strong, size: 96, color: kRed),
             const SizedBox(height: 12),
             Text(
-              _modelReady
-                  ? 'Ambil atau unggah gambar tanaman cabai untuk dideteksi.'
-                  : 'Memuat model...',
+              'Ambil atau unggah gambar tanaman cabai untuk dideteksi.\n'
+              '(Model dimuat saat pemindaian pertama.)',
               textAlign: TextAlign.center,
             ),
-            if (!_modelReady && _error == null) ...[
-              const SizedBox(height: 16),
-              const CircularProgressIndicator(),
-            ],
           ],
         ),
       ),
@@ -255,6 +263,17 @@ class _HomePageState extends State<HomePage> {
     if (_showHistory) return const HistoryPage();
     return Column(
       children: [
+        ValueListenableBuilder<String?>(
+          valueListenable: kAppError,
+          builder: (context, v, _) => v == null
+              ? const SizedBox.shrink()
+              : Container(
+                  width: double.infinity,
+                  color: Colors.orange.shade100,
+                  padding: const EdgeInsets.all(12),
+                  child: Text(v),
+                ),
+        ),
         if (_error != null)
           Container(
             width: double.infinity,
