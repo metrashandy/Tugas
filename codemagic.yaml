@@ -26,6 +26,8 @@ workflows:
           perl -pi -e 's/android:label="[^"]*"/android:label="CapsiScan"/' android/app/src/main/AndroidManifest.xml || true
       - name: Ambil dependensi
         script: flutter pub get
+      - name: Buat ikon aplikasi
+        script: dart run flutter_launcher_icons || echo "Ikon gagal dibuat, lanjut dengan ikon bawaan"
       - name: Bangun APK
         script: flutter build apk --release --no-shrink
     artifacts:

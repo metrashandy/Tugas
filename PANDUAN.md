@@ -28,3 +28,8 @@ Salin 30-50 baris terakhir log yang berwarna merah dan kirim ke saya.
 - Prapemrosesan (bilateral filter + CLAHE) belum diterapkan; ada fungsi `preprocess` di `lib/detector.dart` sebagai tempatnya.
 - Ambang confidence dan mode voting ada di `lib/detector.dart` dan `lib/voting.dart`.
 - Ambil foto dengan rasio 1:1 di kamera HP agar mirip data latih.
+
+## Pembaruan v2 (UI sesuai desain)
+- Warna utama #FE1C1C (`lib/ui.dart`), logo di `assets/images/`, ikon aplikasi dibuat otomatis oleh Codemagic.
+- Label di layar hasil: ganti kata "Akurasi" menjadi "Confidence" lewat konstanta `kConfLabel` di `lib/ui.dart`.
+- Label kotak deteksi memakai nama kelas (mis. "Buah Rawit 95 %").

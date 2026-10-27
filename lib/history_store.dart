@@ -71,7 +71,7 @@ class HistoryStore {
   }) async {
     final dir = await getApplicationDocumentsDirectory();
     final id = DateTime.now().millisecondsSinceEpoch.toString();
-    final file = File('${dir.path}/scan_$id.jpg');
+    final file = File('${dir.path}/scan_$id.png');
     await file.writeAsBytes(imageBytes);
     final item = HistoryItem(
       id: id,

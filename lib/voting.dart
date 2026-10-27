@@ -62,3 +62,6 @@ VoteResult castVote(List<DetItem> items) {
   if (top.length > 1) return VoteResult(points, null, top, false);
   return VoteResult(points, top.first, const [], false);
 }
+
+/// "buah-rawit" -> "Buah Rawit" (untuk label kotak deteksi).
+String prettyClass(String cls) => _parts(cls).map(_cap).join(' ');

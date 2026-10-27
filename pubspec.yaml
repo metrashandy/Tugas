@@ -14,7 +14,18 @@ dependencies:
   path_provider: ^2.1.4
   shared_preferences: ^2.3.2
 
+dev_dependencies:
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/images/logo.png"
+  adaptive_icon_background: "#FE1C1C"
+  adaptive_icon_foreground: "assets/images/logo_foreground.png"
+
 flutter:
   uses-material-design: true
   assets:
     - assets/models/
+    - assets/images/

@@ -5,6 +5,8 @@ import 'package:image_picker/image_picker.dart';
 import 'detector.dart';
 import 'history_page.dart';
 import 'history_store.dart';
+import 'image_utils.dart';
+import 'ui.dart';
 import 'voting.dart';
 
 /// Menampung galat tak tertangani agar tampil di layar (bukan langsung menutup).
@@ -21,8 +23,6 @@ void main() {
     kAppError.value = 'Galat tak tertangani: $error';
   });
 }
-
-const Color kRed = Color(0xFFD32F2F);
 
 class CapsiScanApp extends StatelessWidget {
   const CapsiScanApp({super.key});
@@ -61,22 +61,10 @@ class _SplashPageState extends State<SplashPage> {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
+    return Scaffold(
       backgroundColor: kRed,
       body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.center_focus_strong, size: 96, color: Colors.white),
-            SizedBox(height: 16),
-            Text(
-              'CapsiScan',
-              style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
-            ),
-            SizedBox(height: 4),
-            Text('Deteksi Tanaman Cabai', style: TextStyle(color: Colors.white70)),
-          ],
-        ),
+        child: Image.asset('assets/images/logo.png', width: 230),
       ),
     );
   }
@@ -85,20 +73,26 @@ class _SplashPageState extends State<SplashPage> {
 class ScanResult {
   final DetectionOutput output;
   final VoteResult vote;
-  const ScanResult(this.output, this.vote);
+  final int totalMs;
+  const ScanResult(this.output, this.vote, this.totalMs);
 
-  double get avgConf => output.items.isEmpty
+  int get count => output.boxes.length;
+
+  double get avgConf => output.boxes.isEmpty
       ? 0
-      : output.items.map((e) => e.confidence).reduce((a, b) => a + b) / output.items.length;
+      : output.boxes.map((e) => e.confidence).reduce((a, b) => a + b) / output.boxes.length;
 
   String get organsSummary {
     final counts = <String, int>{};
-    for (final it in output.items) {
-      counts[it.className] = (counts[it.className] ?? 0) + 1;
+    for (final b in output.boxes) {
+      counts[b.className] = (counts[b.className] ?? 0) + 1;
     }
     if (counts.isEmpty) return '-';
     return counts.entries.map((e) => '${e.key} x${e.value}').join(', ');
   }
+
+  String get pointsSummary =>
+      vote.points.entries.map((e) => '${e.key} ${e.value}').join(', ');
 }
 
 class HomePage extends StatefulWidget {
@@ -114,10 +108,11 @@ class _HomePageState extends State<HomePage> {
   bool _modelReady = false;
   bool _busy = false;
   bool _showHistory = false;
-  String? _error;
-  Uint8List? _original;
-  ScanResult? _result;
+  bool _expanded = true;
   bool _saved = false;
+  String? _error;
+  Uint8List? _annotated;
+  ScanResult? _result;
 
   /// Model dimuat saat pemindaian pertama (bukan saat aplikasi dibuka),
   /// supaya aplikasi tetap bisa dibuka walaupun model bermasalah.
@@ -136,7 +131,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _scan(ImageSource source) async {
-    final picked = await _picker.pickImage(source: source, imageQuality: 95);
+    final picked = await _picker.pickImage(
+      source: source,
+      maxWidth: 2048,
+      maxHeight: 2048,
+      imageQuality: 95,
+    );
     if (picked == null) return;
     setState(() {
       _busy = true;
@@ -146,13 +146,18 @@ class _HomePageState extends State<HomePage> {
     });
     try {
       if (!await _ensureModel()) return;
-      final bytes = await picked.readAsBytes();
-      final out = await _detector.run(bytes);
+      final raw = await picked.readAsBytes();
+      final sw = Stopwatch()..start();
+      final norm = await normalizeImage(raw);
+      final out = await _detector.run(norm.png, norm.width, norm.height);
+      sw.stop();
+      final annotated = await renderAnnotated(norm.png, out.boxes);
       final vote = castVote(out.items);
       if (!mounted) return;
       setState(() {
-        _original = bytes;
-        _result = ScanResult(out, vote);
+        _annotated = annotated;
+        _result = ScanResult(out, vote, sw.elapsedMilliseconds);
+        _expanded = true;
       });
     } catch (e) {
       if (!mounted) return;
@@ -164,14 +169,14 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _save() async {
     final r = _result;
-    final o = _original;
-    if (r == null || o == null) return;
+    final img = _annotated;
+    if (r == null || img == null) return;
     await HistoryStore.add(
-      imageBytes: r.output.annotated ?? o,
+      imageBytes: img,
       jenis: r.vote.label,
       avgConf: r.avgConf,
-      count: r.output.items.length,
-      ms: r.output.endToEndMs,
+      count: r.count,
+      ms: r.totalMs,
       organs: r.organsSummary,
     );
     if (!mounted) return;
@@ -182,7 +187,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _reset() => setState(() {
-        _original = null;
+        _annotated = null;
         _result = null;
         _error = null;
         _saved = false;
@@ -195,12 +200,12 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.center_focus_strong, size: 96, color: kRed),
-            const SizedBox(height: 12),
-            Text(
-              'Ambil atau unggah gambar tanaman cabai untuk dideteksi.\n'
-              '(Model dimuat saat pemindaian pertama.)',
+            Image.asset('assets/images/logo.png', width: 200),
+            const SizedBox(height: 16),
+            const Text(
+              'Ambil atau unggah gambar tanaman cabai untuk dideteksi.',
               textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 15),
             ),
           ],
         ),
@@ -208,115 +213,115 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _resultView() {
-    final r = _result!;
-    final shown = r.output.annotated ?? _original!;
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
-        ClipRRect(borderRadius: BorderRadius.circular(12), child: Image.memory(shown)),
-        const SizedBox(height: 12),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
+  Widget _summarySheet(ScanResult r) {
+    final pct = (r.avgConf * 100).round();
+    return SheetPanel(
+      title: 'Ringkasan Deteksi',
+      expanded: _expanded,
+      onToggle: () => setState(() => _expanded = !_expanded),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GreyCard(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Ringkasan Deteksi', style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                Text(r.vote.label, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: kRed)),
-                const SizedBox(height: 8),
-                Text('Rata-rata confidence: ${(r.avgConf * 100).toStringAsFixed(1)}%'),
-                Text('Jumlah objek: ${r.output.items.length}'),
-                Text('Organ terdeteksi: ${r.organsSummary}'),
-                Text('Suara: ${r.vote.points.entries.map((e) => '${e.key} ${e.value}').join(', ')}'),
-                Text('Waktu model: ${r.output.pluginMs.toStringAsFixed(0)} ms'),
-                Text('Waktu end-to-end: ${r.output.endToEndMs} ms'),
+                Text(
+                  r.vote.label,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontFamily: kSerif,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text('$kConfLabel : $pct %'),
+                    const SizedBox(width: 24),
+                    Text('Jumlah : ${r.count} Objek'),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Waktu proses ${r.totalMs} ms  |  Suara: ${r.pointsSummary}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 11, color: Colors.black54),
+                ),
               ],
             ),
           ),
-        ),
-        Row(
-          children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: _saved ? null : _save,
-                icon: const Icon(Icons.save),
-                label: Text(_saved ? 'Tersimpan' : 'Simpan'),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: _saved ? null : _save,
+                  style: filledRed(),
+                  child: Text(_saved ? 'TERSIMPAN' : 'SIMPAN'),
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _reset,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Scan Ulang'),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _reset,
+                  style: outlinedRed(),
+                  child: const Text('SCAN ULANG'),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _scanBody() {
+    final r = _result;
+    final img = _annotated;
+    if (r == null || img == null) return _placeholder();
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Container(
+            color: Colors.black,
+            child: Center(child: Image.memory(img, fit: BoxFit.contain)),
+          ),
         ),
+        Positioned(left: 0, right: 0, bottom: 0, child: _summarySheet(r)),
       ],
     );
   }
 
-  Widget _body() {
-    if (_showHistory) return const HistoryPage();
-    return Column(
-      children: [
-        ValueListenableBuilder<String?>(
-          valueListenable: kAppError,
-          builder: (context, v, _) => v == null
-              ? const SizedBox.shrink()
-              : Container(
-                  width: double.infinity,
-                  color: Colors.orange.shade100,
-                  padding: const EdgeInsets.all(12),
-                  child: Text(v),
-                ),
-        ),
-        if (_error != null)
-          Container(
-            width: double.infinity,
-            color: Colors.red.shade50,
-            padding: const EdgeInsets.all(12),
-            child: Text(_error!, style: TextStyle(color: Colors.red.shade900)),
-          ),
-        if (_busy) const LinearProgressIndicator(),
-        Expanded(child: _result == null ? _placeholder() : _resultView()),
-      ],
-    );
-  }
+  Widget _banner(String text, Color bg) => Container(
+        width: double.infinity,
+        color: bg,
+        padding: const EdgeInsets.all(12),
+        child: Text(text),
+      );
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: kRed,
-        foregroundColor: Colors.white,
-        title: Text(_showHistory ? 'Riwayat' : 'CapsiScan'),
-        centerTitle: true,
-      ),
-      body: _body(),
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: kRed,
-        selectedItemColor: Colors.white,
-        unselectedItemColor: Colors.white70,
-        type: BottomNavigationBarType.fixed,
-        currentIndex: _showHistory ? 2 : 0,
-        onTap: (i) {
-          if (i == 0) {
-            _scan(ImageSource.gallery);
-          } else if (i == 1) {
-            _scan(ImageSource.camera);
-          } else {
-            setState(() => _showHistory = true);
-          }
-        },
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.photo_library), label: 'Unggah Gambar'),
-          BottomNavigationBarItem(icon: Icon(Icons.camera_alt), label: 'Ambil Gambar'),
-          BottomNavigationBarItem(icon: Icon(Icons.history), label: 'Riwayat'),
+      appBar: const CapsiAppBar(),
+      body: Column(
+        children: [
+          ValueListenableBuilder<String?>(
+            valueListenable: kAppError,
+            builder: (context, v, _) =>
+                v == null ? const SizedBox.shrink() : _banner(v, Colors.orange.shade100),
+          ),
+          if (_error != null) _banner(_error!, Colors.red.shade50),
+          if (_busy) const LinearProgressIndicator(color: kRed),
+          Expanded(child: _showHistory ? const HistoryPage() : _scanBody()),
         ],
+      ),
+      bottomNavigationBar: CapsiBottomBar(
+        historyActive: _showHistory,
+        onUpload: () => _scan(ImageSource.gallery),
+        onCamera: () => _scan(ImageSource.camera),
+        onHistory: () => setState(() => _showHistory = true),
       ),
     );
   }
