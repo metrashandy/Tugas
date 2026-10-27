@@ -20,15 +20,31 @@ workflows:
           if [ ! -d android ]; then
             flutter create --platforms=android --project-name capsiscan --org id.capsiscan .
           fi
-      - name: Atur minSdk menjadi 26 dan nama aplikasi
+      - name: Atur izin Kamera, Memori, minSdk, dan noCompress TFLite
         script: |
+          # 1. Atur minSdk menjadi 26
           perl -pi -e 's/minSdk = flutter\.minSdkVersion/minSdk = 26/; s/minSdkVersion flutter\.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* || true
+          
+          # 2. Atur nama aplikasi
           perl -pi -e 's/android:label="[^"]*"/android:label="CapsiScan"/' android/app/src/main/AndroidManifest.xml || true
+
+          # 3. Masukkan izin Kamera & Penyimpanan ke AndroidManifest.xml
+          perl -pi -e 's|<application|<uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <application|' android/app/src/main/AndroidManifest.xml || true
+
+          # 4. Aktifkan largeHeap agar HP tidak kehabisan RAM saat load model YOLO
+          perl -pi -e 's|<application|<application android:largeHeap="true"|' android/app/src/main/AndroidManifest.xml || true
+
+          # 5. Cegah Android mengompresi file .tflite agar library YOLO bisa membacanya
+          if [ -f android/app/build.gradle.kts ]; then
+            perl -pi -e 's|android \{|android {\n    androidResources {\n        noCompress.add("tflite")\n    }|' android/app/build.gradle.kts || true
+          elif [ -f android/app/build.gradle ]; then
+            perl -pi -e 's|android \{|android {\n    aaptOptions {\n        noCompress "tflite"\n    }|' android/app/build.gradle || true
+          fi
       - name: Ambil dependensi
         script: flutter pub get
       - name: Buat ikon aplikasi
         script: dart run flutter_launcher_icons || echo "Ikon gagal dibuat, lanjut dengan ikon bawaan"
-      - name: Bangun APK
-        script: flutter build apk --release --no-shrink
+      - name: Bangun APK Ringan (Split per ABI)
+        script: flutter build apk --release --split-per-abi --no-shrink
     artifacts:
-      - build/**/outputs/**/*.apk
+      - build/app/outputs/flutter-apk/*.apk
