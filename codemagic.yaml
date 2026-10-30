@@ -17,7 +17,7 @@ workflows:
           if [ ! -d android ]; then
             flutter create --platforms=android --project-name capsiscan --org id.capsiscan .
           fi
-      - name: Konfigurasi Android, Izin Kamera, dan Salin Model Native
+      - name: Konfigurasi Android, Izin, dan Native Assets
         script: |
           # 1. Atur minSdk menjadi 26
           perl -pi -e 's/minSdk = flutter\.minSdkVersion/minSdk = 26/; s/minSdkVersion flutter\.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* || true
@@ -26,11 +26,10 @@ workflows:
           M=android/app/src/main/AndroidManifest.xml
           perl -pi -e 's/android:label="[^"]*"/android:label="CapsiScan"/' $M || true
 
-          # 3. Tambahkan izin Kamera & Penyimpanan
+          # 3. Masukkan izin Kamera (tanpa merusak tag application)
           perl -pi -e 's|<application|<uses-permission android:name="android.permission.CAMERA" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <application|' $M || true
-          perl -pi -e 's|<application|<application android:largeHeap="true"|' $M || true
 
-          # 4. SALIN MODEL KE NATIVE ASSETS (Kunci agar ultralytics_yolo tidak crash)
+          # 4. SALIN MODEL KE NATIVE ASSETS (Wajib untuk plugin ultralytics_yolo)
           mkdir -p android/app/src/main/assets
           cp assets/models/model.tflite android/app/src/main/assets/model.tflite
           echo "Model berhasil disalin ke native assets:"
@@ -45,8 +44,8 @@ workflows:
       - name: Ambil dependensi
         script: flutter pub get
       - name: Buat ikon aplikasi
-        script: dart run flutter_launcher_icons || echo "Lanjut ikon default"
-      - name: Bangun APK (Ringan per ABI)
+        script: dart run flutter_launcher_icons || echo "Ikon default"
+      - name: Bangun APK Ringan
         script: flutter build apk --release --split-per-abi --no-shrink
     artifacts:
       - build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
