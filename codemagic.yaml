@@ -9,109 +9,44 @@ workflows:
         script: |
           if [ ! -f assets/models/model.tflite ]; then
             echo "GALAT: assets/models/model.tflite belum ada."
-            echo "Ekspor best.pt ke TFLite di Colab, ganti namanya menjadi model.tflite, lalu unggah ke assets/models/."
             exit 1
           fi
           ls -lh assets/models/
-      - name: Versi Flutter
-        script: flutter --version
       - name: Buat folder Android jika belum ada
         script: |
           if [ ! -d android ]; then
             flutter create --platforms=android --project-name capsiscan --org id.capsiscan .
           fi
-      - name: Atur minSdk, nama aplikasi, izin, largeHeap, Impeller, dan noCompress tflite
+      - name: Konfigurasi Android, Izin Kamera, dan Salin Model Native
         script: |
-          M=android/app/src/main/AndroidManifest.xml
-          # 1. minSdk 26
+          # 1. Atur minSdk menjadi 26
           perl -pi -e 's/minSdk = flutter\.minSdkVersion/minSdk = 26/; s/minSdkVersion flutter\.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* || true
-          # 2. nama aplikasi
+          
+          # 2. Atur nama aplikasi di AndroidManifest
+          M=android/app/src/main/AndroidManifest.xml
           perl -pi -e 's/android:label="[^"]*"/android:label="CapsiScan"/' $M || true
-          # 3. izin kamera (image_picker meminta izinnya saat dipakai)
+
+          # 3. Tambahkan izin Kamera & Penyimpanan
           perl -pi -e 's|<application|<uses-permission android:name="android.permission.CAMERA" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <application|' $M || true
-          # 4. largeHeap agar RAM cukup saat memuat model
           perl -pi -e 's|<application|<application android:largeHeap="true"|' $M || true
-          # 5. matikan Impeller (sering bermasalah di HP kelas bawah)
-          perl -0pi -e 's#</application>#    <meta-data android:name="io.flutter.embedding.android.EnableImpeller" android:value="false"/>\n    </application>#' $M || true
-          # 6. jangan kompres file .tflite
+
+          # 4. SALIN MODEL KE NATIVE ASSETS (Kunci agar ultralytics_yolo tidak crash)
+          mkdir -p android/app/src/main/assets
+          cp assets/models/model.tflite android/app/src/main/assets/model.tflite
+          echo "Model berhasil disalin ke native assets:"
+          ls -lh android/app/src/main/assets/
+
+          # 5. Mencegah Android mengompres file model .tflite
           if [ -f android/app/build.gradle.kts ]; then
             perl -pi -e 's|android \{|android {\n    androidResources {\n        noCompress.add("tflite")\n    }|' android/app/build.gradle.kts || true
           elif [ -f android/app/build.gradle ]; then
             perl -pi -e 's|android \{|android {\n    aaptOptions {\n        noCompress "tflite"\n    }|' android/app/build.gradle || true
           fi
-          echo "===== AndroidManifest.xml ====="
-          cat $M
-          echo "===== build.gradle ====="
-          cat android/app/build.gradle*
       - name: Ambil dependensi
         script: flutter pub get
       - name: Buat ikon aplikasi
-        script: dart run flutter_launcher_icons || echo "Ikon gagal dibuat, lanjut dengan ikon bawaan"
-      - name: Bangun APK (dipisah per ABI)
+        script: dart run flutter_launcher_icons || echo "Lanjut ikon default"
+      - name: Bangun APK (Ringan per ABI)
         script: flutter build apk --release --split-per-abi --no-shrink
     artifacts:
-      - build/app/outputs/flutter-apk/*.apk
-
-  diag-android:
-    name: Diagnosis Android (tanpa model)
-    max_build_duration: 60
-    environment:
-      flutter: stable
-    scripts:
-      - name: Bangun diag1 (Flutter saja, tanpa plugin)
-        script: |
-          set -e
-          cd "$CM_BUILD_DIR"
-          rm -rf diag1
-          flutter create --platforms=android --project-name diag1 --org id.capsiscan.diag1 diag1
-          cd diag1
-          cat > lib/main.dart <<'EOF'
-          import 'dart:io';
-          import 'package:flutter/material.dart';
-
-          void main() {
-            runApp(MaterialApp(
-              home: Scaffold(
-                appBar: AppBar(title: const Text('DIAG 1: Flutter saja')),
-                body: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: SelectableText('Aplikasi terbuka normal.\n\n' + Platform.version + '\n\n' + Platform.operatingSystemVersion),
-                ),
-              ),
-            ));
-          }
-          EOF
-          flutter build apk --release
-          cp build/app/outputs/flutter-apk/app-release.apk ../diag1.apk
-      - name: Bangun diag2 (Flutter + plugin ultralytics_yolo)
-        script: |
-          set -e
-          cd "$CM_BUILD_DIR"
-          rm -rf diag2
-          flutter create --platforms=android --project-name diag2 --org id.capsiscan.diag2 diag2
-          cd diag2
-          flutter pub add ultralytics_yolo:^0.6.15
-          perl -pi -e 's/minSdk = flutter\.minSdkVersion/minSdk = 26/; s/minSdkVersion flutter\.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* || true
-          cat > lib/main.dart <<'EOF'
-          import 'dart:io';
-          import 'package:flutter/material.dart';
-          import 'package:ultralytics_yolo/ultralytics_yolo.dart';
-
-          void main() {
-            final yolo = YOLO(modelPath: 'assets/models/model.tflite', task: YOLOTask.detect);
-            runApp(MaterialApp(
-              home: Scaffold(
-                appBar: AppBar(title: const Text('DIAG 2: plugin YOLO')),
-                body: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: SelectableText('Plugin ultralytics_yolo terpasang (' + yolo.runtimeType.toString() + ').\n\n' + Platform.version),
-                ),
-              ),
-            ));
-          }
-          EOF
-          flutter build apk --release
-          cp build/app/outputs/flutter-apk/app-release.apk ../diag2.apk
-    artifacts:
-      - diag1.apk
-      - diag2.apk
+      - build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
