@@ -17,25 +17,43 @@ workflows:
           if [ ! -d android ]; then
             flutter create --platforms=android --project-name capsiscan --org id.capsiscan .
           fi
-      - name: Konfigurasi Android, Izin, dan Native Assets
+      - name: Pasang Proguard Rules untuk Mengatasi Crash WorkDatabase
         script: |
-          # 1. Atur minSdk menjadi 26
+          # 1. Buat aturan Proguard agar R8 tidak menghapus class WorkDatabase & Room
+          cat << 'EOF' > android/app/proguard-rules.pro
+          -keep class androidx.work.impl.** { *; }
+          -dontwarn androidx.work.impl.**
+          -keep class * extends androidx.room.RoomDatabase { *; }
+          -keep class * extends androidx.work.InputMerger { *; }
+          -keep class androidx.startup.** { *; }
+          -keep class com.google.** { *; }
+          -dontwarn com.google.**
+          EOF
+
+          # 2. Hubungkan Proguard & matikan Minify di build.gradle
+          if [ -f android/app/build.gradle.kts ]; then
+            perl -pi -e 's|release \{|release {\n        isMinifyEnabled = false\n        isShrinkResources = false\n        proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")|' android/app/build.gradle.kts || true
+          elif [ -f android/app/build.gradle ]; then
+            perl -pi -e 's|release \{|release {\n        minifyEnabled false\n        shrinkResources false\n        proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"|' android/app/build.gradle || true
+          fi
+      - name: Konfigurasi Izin Kamera, Nama Aplikasi, dan Native Model
+        script: |
+          # 1. minSdk 26
           perl -pi -e 's/minSdk = flutter\.minSdkVersion/minSdk = 26/; s/minSdkVersion flutter\.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* || true
           
-          # 2. Atur nama aplikasi di AndroidManifest
+          # 2. Nama Aplikasi
           M=android/app/src/main/AndroidManifest.xml
           perl -pi -e 's/android:label="[^"]*"/android:label="CapsiScan"/' $M || true
 
-          # 3. Masukkan izin Kamera (tanpa merusak tag application)
+          # 3. Izin Kamera & LargeHeap
           perl -pi -e 's|<application|<uses-permission android:name="android.permission.CAMERA" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n    <application|' $M || true
+          perl -pi -e 's|<application|<application android:largeHeap="true"|' $M || true
 
-          # 4. SALIN MODEL KE NATIVE ASSETS (Wajib untuk plugin ultralytics_yolo)
+          # 4. Salin model ke Native Assets
           mkdir -p android/app/src/main/assets
           cp assets/models/model.tflite android/app/src/main/assets/model.tflite
-          echo "Model berhasil disalin ke native assets:"
-          ls -lh android/app/src/main/assets/
 
-          # 5. Mencegah Android mengompres file model .tflite
+          # 5. Cegah kompresi TFLite
           if [ -f android/app/build.gradle.kts ]; then
             perl -pi -e 's|android \{|android {\n    androidResources {\n        noCompress.add("tflite")\n    }|' android/app/build.gradle.kts || true
           elif [ -f android/app/build.gradle ]; then
@@ -44,8 +62,8 @@ workflows:
       - name: Ambil dependensi
         script: flutter pub get
       - name: Buat ikon aplikasi
-        script: dart run flutter_launcher_icons || echo "Ikon default"
-      - name: Bangun APK Ringan
-        script: flutter build apk --release --split-per-abi --no-shrink
+        script: dart run flutter_launcher_icons || echo "Lanjut ikon bawaan"
+      - name: Bangun APK
+        script: flutter build apk --release --split-per-abi
     artifacts:
       - build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
