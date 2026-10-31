@@ -19,7 +19,6 @@ workflows:
           fi
       - name: Pasang Proguard Rules untuk Mengatasi Crash WorkDatabase
         script: |
-          # 1. Buat aturan Proguard agar R8 tidak menghapus class WorkDatabase & Room
           cat << 'EOF' > android/app/proguard-rules.pro
           -keep class androidx.work.impl.** { *; }
           -dontwarn androidx.work.impl.**
@@ -30,17 +29,16 @@ workflows:
           -dontwarn com.google.**
           EOF
 
-          # 2. Hubungkan Proguard & matikan Minify di build.gradle
           if [ -f android/app/build.gradle.kts ]; then
-            perl -pi -e 's|release \{|release {\n        isMinifyEnabled = false\n        isShrinkResources = false\n        proguardFiles(getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro")|' android/app/build.gradle.kts || true
+            perl -pi -e 's|release \{|release {\n        isMinifyEnabled = false\n        isShrinkResources = false\n        proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")|' android/app/build.gradle.kts || true
           elif [ -f android/app/build.gradle ]; then
-            perl -pi -e 's|release \{|release {\n        minifyEnabled false\n        shrinkResources false\n        proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"|' android/app/build.gradle || true
+            perl -pi -e 's|release \{|release {\n        minifyEnabled false\n        shrinkResources false\n        proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"|' android/app/build.gradle || true
           fi
       - name: Konfigurasi Izin Kamera, Nama Aplikasi, dan Native Model
         script: |
           # 1. minSdk 26
           perl -pi -e 's/minSdk = flutter\.minSdkVersion/minSdk = 26/; s/minSdkVersion flutter\.minSdkVersion/minSdkVersion 26/' android/app/build.gradle* || true
-          
+
           # 2. Nama Aplikasi
           M=android/app/src/main/AndroidManifest.xml
           perl -pi -e 's/android:label="[^"]*"/android:label="CapsiScan"/' $M || true
@@ -64,6 +62,6 @@ workflows:
       - name: Buat ikon aplikasi
         script: dart run flutter_launcher_icons || echo "Lanjut ikon bawaan"
       - name: Bangun APK
-        script: flutter build apk --release --split-per-abi
+        script: flutter build apk --release --split-per-abi --no-shrink
     artifacts:
       - build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
