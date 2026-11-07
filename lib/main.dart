@@ -91,8 +91,18 @@ class ScanResult {
     return counts.entries.map((e) => '${e.key} x${e.value}').join(', ');
   }
 
-  String get pointsSummary =>
-      vote.points.entries.map((e) => '${e.key} ${e.value}').join(', ');
+  String get pointsSummary {
+    final s = vote.points.entries.map((e) => '${e.key} ${e.value}').join(', ');
+    // Saat suara seri, tampilkan juga skor confidence yang dipakai tie-break.
+    if (vote.note != null && vote.scores.isNotEmpty) {
+      final sc = vote.scores.entries
+          .where((e) => e.value > 0)
+          .map((e) => '${e.key} ${e.value.toStringAsFixed(2)}')
+          .join(', ');
+      return '$s | Skor: $sc';
+    }
+    return s;
+  }
 }
 
 class HomePage extends StatefulWidget {
@@ -105,14 +115,27 @@ class _HomePageState extends State<HomePage> {
   final CapsiDetector _detector = CapsiDetector();
   final ImagePicker _picker = ImagePicker();
 
+  /// Label tahap proses yang ditampilkan di atas animasi pemindaian.
+  final ValueNotifier<String> _stage = ValueNotifier<String>('Menyiapkan gambar');
+
   bool _modelReady = false;
   bool _busy = false;
   bool _showHistory = false;
   bool _expanded = true;
   bool _saved = false;
   String? _error;
+  Uint8List? _preview; // foto yang sedang diproses (untuk animasi)
   Uint8List? _annotated;
   ScanResult? _result;
+
+  /// Tombol kembali muncul saat ada hasil, riwayat, atau galat di layar.
+  bool get _canGoBack => !_busy && (_showHistory || _result != null || _error != null);
+
+  @override
+  void dispose() {
+    _stage.dispose();
+    super.dispose();
+  }
 
   /// Model dimuat saat pemindaian pertama (bukan saat aplikasi dibuka),
   /// supaya aplikasi tetap bisa dibuka walaupun model bermasalah.
@@ -131,6 +154,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _scan(ImageSource source) async {
+    if (_busy) return;
     final picked = await _picker.pickImage(
       source: source,
       maxWidth: 2048,
@@ -138,21 +162,35 @@ class _HomePageState extends State<HomePage> {
       imageQuality: 95,
     );
     if (picked == null) return;
+    final raw = await picked.readAsBytes();
+    if (!mounted) return;
+
+    _stage.value = _modelReady ? 'Menyiapkan gambar' : 'Memuat model';
     setState(() {
       _busy = true;
       _showHistory = false;
       _error = null;
       _saved = false;
+      _annotated = null;
+      _result = null;
+      _preview = raw; // foto langsung tampil bersama animasi pemindaian
     });
     try {
       if (!await _ensureModel()) return;
-      final raw = await picked.readAsBytes();
       final sw = Stopwatch()..start();
+      _stage.value = 'Menyiapkan gambar';
       final norm = await normalizeImage(raw);
-      final out = await _detector.run(norm.png, norm.width, norm.height);
-      sw.stop();
-      final annotated = await renderAnnotated(norm.png, out.boxes);
+      final out = await _detector.run(
+        norm.png,
+        norm.width,
+        norm.height,
+        onStage: (s) => _stage.value = s,
+      );
+      _stage.value = 'Menghitung voting';
       final vote = castVote(out.items);
+      sw.stop();
+      _stage.value = 'Menggambar hasil';
+      final annotated = await renderAnnotated(norm.png, out.boxes);
       if (!mounted) return;
       setState(() {
         _annotated = annotated;
@@ -163,7 +201,12 @@ class _HomePageState extends State<HomePage> {
       if (!mounted) return;
       setState(() => _error = 'Gagal memproses gambar: $e');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _preview = null;
+        });
+      }
     }
   }
 
@@ -186,7 +229,10 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// Kembali ke layar awal (dipakai tombol kembali, tombol back sistem,
+  /// dan SCAN ULANG).
   void _reset() => setState(() {
+        _showHistory = false;
         _annotated = null;
         _result = null;
         _error = null;
@@ -215,6 +261,9 @@ class _HomePageState extends State<HomePage> {
 
   Widget _summarySheet(ScanResult r) {
     final pct = (r.avgConf * 100).round();
+    final prep = r.output.prepOk
+        ? 'prapro ${r.output.prepMs} ms'
+        : 'prapro dilewati';
     return SheetPanel(
       title: 'Ringkasan Deteksi',
       expanded: _expanded,
@@ -243,9 +292,21 @@ class _HomePageState extends State<HomePage> {
                     Text('Jumlah : ${r.count} Objek'),
                   ],
                 ),
+                if (r.vote.note != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    r.vote.note!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: kRedDark,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 6),
                 Text(
-                  'Waktu proses ${r.totalMs} ms  |  Suara: ${r.pointsSummary}',
+                  'Waktu proses ${r.totalMs} ms ($prep)  |  Suara: ${r.pointsSummary}',
                   textAlign: TextAlign.center,
                   style: const TextStyle(fontSize: 11, color: Colors.black54),
                 ),
@@ -277,21 +338,44 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _scanBody() {
-    final r = _result;
-    final img = _annotated;
-    if (r == null || img == null) return _placeholder();
+  Widget _resultBody(ScanResult r, Uint8List img) {
     return Stack(
       children: [
         Positioned.fill(
           child: Container(
             color: Colors.black,
-            child: Center(child: Image.memory(img, fit: BoxFit.contain)),
+            child: Center(
+              child: Image.memory(img, fit: BoxFit.contain, gaplessPlayback: true),
+            ),
           ),
         ),
-        Positioned(left: 0, right: 0, bottom: 0, child: _summarySheet(r)),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: SlideUpIn(child: _summarySheet(r)),
+        ),
       ],
     );
+  }
+
+  /// Satu widget berkunci per tampilan; AnimatedSwitcher memudarkan
+  /// perpindahan antartampilan (ringan: hanya cross-fade).
+  Widget _content() {
+    final r = _result;
+    final img = _annotated;
+    if (_showHistory) return const HistoryPage(key: ValueKey('history'));
+    if (_busy && _preview != null) {
+      return ScanningView(
+        key: const ValueKey('scanning'),
+        image: _preview!,
+        stage: _stage,
+      );
+    }
+    if (r != null && img != null) {
+      return KeyedSubtree(key: const ValueKey('result'), child: _resultBody(r, img));
+    }
+    return KeyedSubtree(key: const ValueKey('placeholder'), child: _placeholder());
   }
 
   Widget _banner(String text, Color bg) => Container(
@@ -303,25 +387,42 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: const CapsiAppBar(),
-      body: Column(
-        children: [
-          ValueListenableBuilder<String?>(
-            valueListenable: kAppError,
-            builder: (context, v, _) =>
-                v == null ? const SizedBox.shrink() : _banner(v, Colors.orange.shade100),
-          ),
-          if (_error != null) _banner(_error!, Colors.red.shade50),
-          if (_busy) const LinearProgressIndicator(color: kRed),
-          Expanded(child: _showHistory ? const HistoryPage() : _scanBody()),
-        ],
-      ),
-      bottomNavigationBar: CapsiBottomBar(
-        historyActive: _showHistory,
-        onUpload: () => _scan(ImageSource.gallery),
-        onCamera: () => _scan(ImageSource.camera),
-        onHistory: () => setState(() => _showHistory = true),
+    return PopScope(
+      // Tombol back sistem ikut kembali ke layar awal sebelum keluar aplikasi.
+      canPop: !_canGoBack,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _canGoBack) _reset();
+      },
+      child: Scaffold(
+        appBar: CapsiAppBar(onBack: _canGoBack ? _reset : null),
+        body: Column(
+          children: [
+            ValueListenableBuilder<String?>(
+              valueListenable: kAppError,
+              builder: (context, v, _) =>
+                  v == null ? const SizedBox.shrink() : _banner(v, Colors.orange.shade100),
+            ),
+            if (_error != null) _banner(_error!, Colors.red.shade50),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                layoutBuilder: (current, previous) => Stack(
+                  fit: StackFit.expand,
+                  children: [...previous, if (current != null) current],
+                ),
+                child: _content(),
+              ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: CapsiBottomBar(
+          historyActive: _showHistory,
+          onUpload: () => _scan(ImageSource.gallery),
+          onCamera: () => _scan(ImageSource.camera),
+          onHistory: () {
+            if (!_busy) setState(() => _showHistory = true);
+          },
+        ),
       ),
     );
   }
